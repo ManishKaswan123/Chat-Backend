@@ -385,6 +385,32 @@ io.on('connection', async (socket) => {
         io.to(roomId).emit('language-update', language);
     });
 
+    // Leave Room
+    socket.on(ACTIONS.LEAVE, async (data) => {
+        const { roomId, userId } = data;
+        // Find and remove the user from the UserSocketMap
+        const userSocketMap = await UserSocketMap.findOneAndDelete({ userId });
+        // Leave the socket room
+        socket.leave(roomId);
+        // Notify others in the room that the user has left
+        const clients = getAllConnectedClients(roomId);
+        const populatedClients = await UserSocketMap.find({ socketId: { $in: clients } }).populate('userId');
+        const removedUser = await UserModel.findById(userId).select('-password');
+        populatedClients.forEach((client) => {
+            io.to(client?.socketId).emit(ACTIONS.LEFT, {
+                populatedClients,
+                user: removedUser,
+                socketId: socket?.id,
+            });
+        });
+        // If the user was the last one in the room, you can optionally clean up any resources here
+        // Optionally, remove previous code/language changes for this user
+        if (!clients.length) {
+            delete lastCodeChange[roomId];
+            delete lastLanguageChange[roomId];
+        }
+    });
+
     // Disconnect 
     socket.on('disconnect', () => {
         onlineUser.delete(user?._id?.toString());
