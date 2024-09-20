@@ -5,6 +5,8 @@ const getUserDetailsFromToken = require('../helpers/getUserDetailsFromToken');
 const UserModel = require('../models/userModel');
 const { ConversationModel, MessageModel } = require('../models/ConversationModel');
 const getConversation = require('../helpers/getConversation');
+const ACTIONS = require('../Action');
+const UserSocketMap = require('../models/UserSocketMap');
 
 const app = express();
 
@@ -19,6 +21,17 @@ const io = new Server(server,{
 
 // Online user
 const onlineUser = new Set();
+
+// save last code change
+const lastCodeChange = {};
+
+// save last language change
+const lastLanguageChange = {};
+
+// Get All connected clients
+const getAllConnectedClients = (roomId) => {
+    return Array.from(io.sockets.adapter.rooms.get(roomId) || []).map((socketId) => socketId);
+}
 
 io.on('connection', async (socket) => {
     const token = socket?.handshake?.auth?.token;
@@ -318,7 +331,60 @@ io.on('connection', async (socket) => {
         io.to(userId).emit('conversation', conversationReceiver);
     });
     
+
+    // Join Room
+    socket.on(ACTIONS.JOIN, async(data) => {
+        const {roomId , userId} = data;
+        const userSocketMap = await UserSocketMap.findOneAndUpdate(
+            { userId }, // Find by userId
+            { socketId: socket?.id }, // Update the socketId
+            { new: true, upsert: true } // Create a new one if it doesn't exist
+        );
+        
+        // console.log('UserSocketMap result:', userSocketMap);
+        
+
+        await userSocketMap.save();
+
+        socket.join(roomId);
+
+        const clients = getAllConnectedClients(roomId);
+        const populatedClients = await UserSocketMap.find({ socketId: { $in: clients } }).populate('userId');
+        const addeduser = await UserModel.findById(userId).select('-password');
+
+        populatedClients.forEach((client) => {
+            io.to(client?.socketId).emit(ACTIONS.JOINED, {
+                populatedClients,
+                user: addeduser,
+                socketId: socket?.id
+            });
+        });
+
+        let prevCode = lastCodeChange[roomId];
+        let prevLanguage = lastLanguageChange[roomId];
+        io.to(roomId).emit(ACTIONS.SYNC_CODE, prevCode);
+        io.to(roomId).emit('language-update', prevLanguage);
+    });
     
+    // Change Code
+    socket.on(ACTIONS.CODE_CHANGE, async(data) => {
+        const {roomId, code} = data;
+        lastCodeChange[roomId] = code;
+        io.to(roomId).emit(ACTIONS.SYNC_CODE, code);
+
+        // const clients = getAllConnectedClients(roomId);
+        // clients.forEach((client) => {
+        //     io.to(client).emit(ACTIONS.CODE_CHANGED, code);
+        // });
+    });
+
+    // language change
+    socket.on('language-change', async(data) => {
+        const {roomId, language} = data;
+        lastLanguageChange[roomId] = language;
+        io.to(roomId).emit('language-update', language);
+    });
+
     // Disconnect 
     socket.on('disconnect', () => {
         onlineUser.delete(user?._id?.toString());
