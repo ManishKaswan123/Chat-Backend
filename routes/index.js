@@ -15,7 +15,7 @@ router.post('/email', checkEmail);
 // Chekc user password
 router.post('/password', checkPassword);
 // Login User Details
-router.get('/user-details', userDetails);
+router.post('/user-details', userDetails);
 // Logout User
 router.get('/logout', logout);
 // Update User Details
